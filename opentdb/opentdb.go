@@ -11,9 +11,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -34,7 +34,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		BaseURL:   "https://opentdb.com",
-		UserAgent: "Mozilla/5.0 (compatible; opentdb-cli/dev; +https://github.com/tamnd/opentdb-cli)",
+		UserAgent: "opentdb-cli/0.1 (tamnd87@gmail.com)",
 		Rate:      500 * time.Millisecond,
 		Timeout:   15 * time.Second,
 		Retries:   3,
@@ -60,8 +60,10 @@ func NewClient(cfg Config) *Client {
 // Questions fetches trivia questions from opentdb.
 // amount must be 1–50. Pass 0 for category, "" for difficulty and qtype to use
 // the API defaults (all categories, all difficulties, all types).
+// The request uses encode=url3986 so that special characters arrive as
+// percent-encoded bytes; each string field is decoded with url.QueryUnescape.
 func (c *Client) Questions(ctx context.Context, amount int, category int, difficulty string, qtype string) ([]Question, error) {
-	u := fmt.Sprintf("%s/api.php?amount=%d", c.cfg.BaseURL, amount)
+	u := fmt.Sprintf("%s/api.php?amount=%d&encode=url3986", c.cfg.BaseURL, amount)
 	if category > 0 {
 		u += fmt.Sprintf("&category=%d", category)
 	}
@@ -89,6 +91,8 @@ func (c *Client) Questions(ctx context.Context, amount int, category int, diffic
 		return nil, fmt.Errorf("no results for the given parameters")
 	case 2:
 		return nil, fmt.Errorf("invalid parameter")
+	case 5:
+		return nil, fmt.Errorf("rate limited by API")
 	default:
 		return nil, fmt.Errorf("API error code %d", resp.ResponseCode)
 	}
@@ -97,19 +101,28 @@ func (c *Client) Questions(ctx context.Context, amount int, category int, diffic
 	for i, r := range resp.Results {
 		ia := make([]string, len(r.IncorrectAnswers))
 		for j, a := range r.IncorrectAnswers {
-			ia[j] = html.UnescapeString(a)
+			ia[j] = unescape(a)
 		}
 		items = append(items, Question{
 			Rank:             i + 1,
-			Category:         html.UnescapeString(r.Category),
-			Type:             r.Type,
-			Difficulty:       r.Difficulty,
-			Question:         html.UnescapeString(r.Question),
-			CorrectAnswer:    html.UnescapeString(r.CorrectAnswer),
+			Category:         unescape(r.Category),
+			Type:             unescape(r.Type),
+			Difficulty:       unescape(r.Difficulty),
+			Question:         unescape(r.Question),
+			CorrectAnswer:    unescape(r.CorrectAnswer),
 			IncorrectAnswers: ia,
 		})
 	}
 	return items, nil
+}
+
+// unescape decodes a percent-encoded string as returned by encode=url3986.
+// If decoding fails the original string is returned unchanged.
+func unescape(s string) string {
+	if dec, err := url.QueryUnescape(s); err == nil {
+		return dec
+	}
+	return s
 }
 
 // Categories fetches the complete list of trivia categories.

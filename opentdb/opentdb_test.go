@@ -10,26 +10,28 @@ import (
 	"github.com/tamnd/opentdb-cli/opentdb"
 )
 
+// fakeQuestionsJSON simulates the encode=url3986 response: special characters
+// are percent-encoded, not HTML-entity-encoded.
 const fakeQuestionsJSON = `{
   "response_code": 0,
   "results": [
     {
       "type": "multiple",
       "difficulty": "medium",
-      "category": "Science: Computers",
-      "question": "What does &quot;HTTP&quot; stand for?",
-      "correct_answer": "HyperText Transfer Protocol",
+      "category": "Science%3A%20Computers",
+      "question": "What%20does%20%22HTTP%22%20stand%20for%3F",
+      "correct_answer": "HyperText%20Transfer%20Protocol",
       "incorrect_answers": [
-        "High Transfer Text Protocol",
-        "HyperText Transmission Protocol",
-        "HyperType Transfer Protocol"
+        "High%20Transfer%20Text%20Protocol",
+        "HyperText%20Transmission%20Protocol",
+        "HyperType%20Transfer%20Protocol"
       ]
     },
     {
       "type": "boolean",
       "difficulty": "easy",
-      "category": "Science: Computers",
-      "question": "Linux was first created as an alternative to Windows XP.",
+      "category": "Science%3A%20Computers",
+      "question": "Linux%20was%20first%20created%20as%20an%20alternative%20to%20Windows%20XP.",
       "correct_answer": "False",
       "incorrect_answers": ["True"]
     }
@@ -55,6 +57,7 @@ const fakeCountJSON = `{
 }`
 
 const fakeErrorJSON = `{"response_code": 1, "results": []}`
+const fakeRateLimitJSON = `{"response_code": 5, "results": []}`
 
 func newTestClient(ts *httptest.Server) *opentdb.Client {
 	cfg := opentdb.DefaultConfig()
@@ -112,7 +115,9 @@ func TestQuestionsParsesItems(t *testing.T) {
 	}
 }
 
-func TestQuestionsHTMLDecoded(t *testing.T) {
+// TestQuestionsURLDecoded checks that percent-encoded strings (encode=url3986)
+// are decoded correctly back to plain text.
+func TestQuestionsURLDecoded(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, fakeQuestionsJSON)
 	}))
@@ -126,6 +131,27 @@ func TestQuestionsHTMLDecoded(t *testing.T) {
 	want := `What does "HTTP" stand for?`
 	if items[0].Question != want {
 		t.Errorf("items[0].Question = %q, want %q", items[0].Question, want)
+	}
+	if items[0].Category != "Science: Computers" {
+		t.Errorf("items[0].Category = %q, want %q", items[0].Category, "Science: Computers")
+	}
+}
+
+func TestQuestionsURLEncode(t *testing.T) {
+	var gotURL string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		_, _ = fmt.Fprint(w, fakeQuestionsJSON)
+	}))
+	defer ts.Close()
+
+	c := newTestClient(ts)
+	_, err := c.Questions(context.Background(), 5, 0, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsStr(gotURL, "encode=url3986") {
+		t.Errorf("URL %q should contain encode=url3986", gotURL)
 	}
 }
 
@@ -219,6 +245,24 @@ func TestQuestionsErrorCode1(t *testing.T) {
 	_, err := c.Questions(context.Background(), 1, 0, "", "")
 	if err == nil {
 		t.Fatal("expected error for response_code=1, got nil")
+	}
+}
+
+func TestQuestionsErrorCode5RateLimit(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, fakeRateLimitJSON)
+	}))
+	defer ts.Close()
+
+	cfg := opentdb.DefaultConfig()
+	cfg.BaseURL = ts.URL
+	cfg.Rate = 0
+	cfg.Retries = 0 // no retries so the test is instant
+	c := opentdb.NewClient(cfg)
+
+	_, err := c.Questions(context.Background(), 1, 0, "", "")
+	if err == nil {
+		t.Fatal("expected error for response_code=5, got nil")
 	}
 }
 
